@@ -1,60 +1,139 @@
-DEVELOPER INSTRUCTIONS:
-=======================
+# Plesk Module for Caddy
 
-- Update module name in go.mod
-- Update dependencies to latest versions (**EXCEPT `caddy/v2` ITSELF**)
-- Update name and year in license
-- Customize configuration and Caddyfile parsing
-- Update godocs / comments (especially provider name and nuances)
-- Update README and remove this section
+This package implements a DNS provider module for [Caddy v2](https://github.com/caddyserver/caddy), allowing you to automate DNS-01 challenges (and dynamic record updates) against a Plesk server’s API.
 
-Thank you for maintaining your Caddy plugin!
+## Module Name
 
-_Remove this section before publishing._
-
----
-
-\<PROVIDER\> module for Caddy
-===========================
-
-This package contains a DNS provider module for [Caddy](https://github.com/caddyserver/caddy). It can be used to manage DNS records with \<PROVIDER\>.
-
-## Caddy module name
-
-```
-dns.providers.provider_name
+```text
+dns.providers.plesk
 ```
 
-## Config examples
+## Installation
 
-To use this module for the ACME DNS challenge, [configure the ACME issuer in your Caddy JSON](https://caddyserver.com/docs/json/apps/tls/automation/policies/issuer/acme/) like so:
+You must build a custom Caddy binary that bundles this module. The easiest way is with [xcaddy](https://github.com/caddyserver/xcaddy):
+
+```bash
+xcaddy build \
+  --with github.com/mikeshootzz/metanet
+```
+
+That produces a `caddy` executable in your working directory with `dns.providers.plesk` registered.
+
+## Configuration
+
+### Provider Options
+
+| Option     | Required? | Default                    | Description                         |
+|------------|-----------|----------------------------|-------------------------------------|
+| `base_url` | no        | `https://localhost/api/v2` | Full URL to your Plesk API endpoint |
+| `api_key`  | no        | ―                          | X-API-Key header value              |
+| `username` | no        | ―                          | HTTP Basic Auth username            |
+| `password` | no        | ―                          | HTTP Basic Auth password            |
+
+You must supply **either** `api_key` **or** both `username` + `password`, depending on how your Plesk instance is secured.
+
+### Environment Variables
+
+You can also reference environment variables in your Caddyfile:
+
+```caddyfile
+tls {
+  dns plesk {
+    base_url   {env.PLESK_BASE_URL}
+    api_key    {env.PLESK_API_KEY}
+    username   {env.PLESK_USER}
+    password   {env.PLESK_PASS}
+  }
+}
+```
+
+```bash
+export PLESK_BASE_URL="https://plesk.example.com/api/v2"
+export PLESK_API_KEY="abc123"
+export PLESK_USER="admin"
+export PLESK_PASS="secret"
+```
+
+## Caddyfile Examples
+
+### Globally (default for all sites)
+
+```caddyfile
+{
+  # Use Plesk as the default DNS-01 issuer for all sites
+  acme_dns plesk {
+    base_url   https://plesk.example.com/api/v2
+    api_key    YOUR_API_KEY
+  }
+}
+
+# all sites from here on will use DNS-01 via Plesk
+example.com, www.example.com {
+  reverse_proxy localhost:8080
+}
+```
+
+### Per-site
+
+```caddyfile
+example.com {
+  reverse_proxy localhost:8080
+
+  tls {
+    dns plesk {
+      base_url https://plesk.example.com/api/v2
+      username admin
+      password yourPassword
+    }
+  }
+}
+```
+
+## JSON (Caddy API) Configuration
 
 ```json
 {
-	"module": "acme",
-	"challenges": {
-		"dns": {
-			"provider": {
-				"name": "provider_name",
-				"api_token": "YOUR_PROVIDER_API_TOKEN"
-			}
-		}
-	}
+  "apps": {
+    "tls": {
+      "automation": {
+        "policies": [
+          {
+            "issuers": [
+              {
+                "module": "acme",
+                "challenges": {
+                  "dns": {
+                    "provider": {
+                      "name": "plesk",
+                      "base_url": "https://plesk.example.com/api/v2",
+                      "api_key": "YOUR_API_KEY"
+                    }
+                  }
+                }
+              }
+            ]
+          }
+        ]
+      }
+    }
+  }
 }
 ```
 
-or with the Caddyfile:
+## How It Works
 
-```
-# globally
-{
-	acme_dns provider_name ...
-}
-```
+1. **GetRecords** — queries your Plesk server for existing DNS records in the zone.
+2. **AppendRecords** — issues a POST to create the `_acme-challenge` TXT records.
+3. **DeleteRecords** — cleans up TXT records after validation.
 
+All HTTP calls go through Plesk’s REST API (`/dns/records` endpoints) with JSON request/response bodies.
+
+## Troubleshooting
+
+### API Access Denied
+
+If you see:
 ```
-# one site
-tls {
-	dns provider_name ...
-}
+plesk error: {"code":0,"message":"Access to API is disabled by admin access policy for <your IP>"}
 ```
+log into Plesk → Tools & Settings → API → IP Access List and whitelist your Caddy server’s egress IP.
