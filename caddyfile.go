@@ -4,7 +4,7 @@ import (
 	"github.com/caddyserver/caddy/v2/caddyconfig/caddyfile"
 )
 
-// UnmarshalCaddyfile configures the provider from a Caddyfile.
+// UnmarshalCaddyfile parses the provider block in a Caddyfile.
 func (p *Provider) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 	for d.Next() {
 		for d.NextBlock(0) {

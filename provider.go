@@ -56,8 +56,8 @@ func (p *Provider) GetRecords(ctx context.Context, zone string) ([]libdns.Record
 	for _, r := range recs {
 		rr := libdns.RR{
 			Name: r.Host,
-			TTL:  time.Duration(r.TTL) * time.Second,
 			Type: r.Type,
+			TTL:  time.Duration(r.TTL) * time.Second,
 			Data: r.Value,
 		}
 		out = append(out, rr)
@@ -68,6 +68,7 @@ func (p *Provider) GetRecords(ctx context.Context, zone string) ([]libdns.Record
 // AppendRecords creates new records in the zone.
 func (p *Provider) AppendRecords(ctx context.Context, zone string, recs []libdns.Record) ([]libdns.Record, error) {
 	client := NewClient(p.BaseURL, p.Username, p.Password, p.APIKey)
+	vals := url.Values{"domain": {zone}}
 	var created []libdns.Record
 	for _, rec := range recs {
 		rr := rec.RR()
@@ -80,25 +81,18 @@ func (p *Provider) AppendRecords(ctx context.Context, zone string, recs []libdns
 		var resp struct {
 			ID int `json:"id"`
 		}
-		if err := client.doRequest("POST", "/dns/records", url.Values{"domain": {zone}}, body, &resp); err != nil {
+		if err := client.doRequest("POST", "/dns/records", vals, body, &resp); err != nil {
 			return nil, err
 		}
-		newRR := libdns.RR{
-			Name: rr.Name,
-			TTL:  rr.TTL,
-			Type: rr.Type,
-			Data: rr.Data,
-		}
-		created = append(created, newRR)
+		created = append(created, rr)
 	}
 	return created, nil
 }
 
-// DeleteRecords removes records matching in the zone.
+// DeleteRecords removes records by matching fields and deletes via ID.
 func (p *Provider) DeleteRecords(ctx context.Context, zone string, recs []libdns.Record) ([]libdns.Record, error) {
 	client := NewClient(p.BaseURL, p.Username, p.Password, p.APIKey)
 	vals := url.Values{"domain": {zone}}
-	// fetch existing with IDs
 	var recList []struct {
 		ID    int    `json:"id"`
 		Type  string `json:"type"`
@@ -110,7 +104,6 @@ func (p *Provider) DeleteRecords(ctx context.Context, zone string, recs []libdns
 		return nil, err
 	}
 	var deleted []libdns.Record
-	// match and delete
 	for _, rec := range recs {
 		rr := rec.RR()
 		for _, r := range recList {
