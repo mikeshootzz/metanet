@@ -1,36 +1,40 @@
-package main
+package plesk
 
 import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"net/http"
 	"net/url"
 )
 
-// Client wraps HTTP calls to Plesk.
+// Client handles requests to the Plesk API.
 type Client struct {
-	BaseURL  string
-	Username string
-	Password string
-	APIKey   string
-	http     *http.Client
+	BaseURL    string
+	Username   string
+	Password   string
+	APIKey     string
+	HTTPClient *http.Client
 }
 
-// NewClient constructs a new Plesk API client.
+// NewClient creates a new API client.
 func NewClient(baseURL, username, password, apiKey string) *Client {
 	return &Client{
-		BaseURL:  baseURL,
-		Username: username,
-		Password: password,
-		APIKey:   apiKey,
-		http:     http.DefaultClient,
+		BaseURL:    baseURL,
+		Username:   username,
+		Password:   password,
+		APIKey:     apiKey,
+		HTTPClient: http.DefaultClient,
 	}
 }
 
-func (c *Client) doRequest(method, path string, query url.Values, body interface{}, result interface{}) error {
-	u := fmt.Sprintf("%s%s?%s", c.BaseURL, path, query.Encode())
+// doRequest makes an HTTP call to Plesk.
+func (c *Client) doRequest(method, path string, params url.Values, body interface{}, out interface{}) error {
+	u := c.BaseURL + path
+	if len(params) > 0 {
+		u += "?" + params.Encode()
+	}
 	var buf bytes.Buffer
 	if body != nil {
 		if err := json.NewEncoder(&buf).Encode(body); err != nil {
@@ -48,17 +52,17 @@ func (c *Client) doRequest(method, path string, query url.Values, body interface
 	if c.Username != "" {
 		req.SetBasicAuth(c.Username, c.Password)
 	}
-	resp, err := c.http.Do(req)
+	resp, err := c.HTTPClient.Do(req)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
-		data, _ := ioutil.ReadAll(resp.Body)
-		return fmt.Errorf("plesk error: %s", string(data))
+		data, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("plesk error: %s", data)
 	}
-	if result != nil {
-		return json.NewDecoder(resp.Body).Decode(result)
+	if out != nil {
+		return json.NewDecoder(resp.Body).Decode(out)
 	}
 	return nil
 }

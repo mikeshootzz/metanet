@@ -1,92 +1,95 @@
-package main
+package plesk
 
 import (
 	"context"
 	"fmt"
 	"net/url"
 
-	caddy_dns "github.com/caddyserver/caddy/v2/modules/caddy-dns"
+	"github.com/caddyserver/caddy/v2"
+	"github.com/libdns/libdns"
 )
 
-// Ensure provider implements interface
-var _ caddy_dns.DNSProvider = (*DNSProvider)(nil)
+// Provider configures the Plesk DNS provider.
+type Provider struct {
+	BaseURL  string `json:"base_url,omitempty"`
+	APIKey   string `json:"api_key,omitempty"`
+	Username string `json:"username,omitempty"`
+	Password string `json:"password,omitempty"`
+}
 
-// Records retrieves all DNS records for the zone.
-func (p *DNSProvider) Records(zone string) ([]caddy_dns.Record, error) {
+func init() {
+	caddy.RegisterModule(Provider{})
+}
+
+// CaddyModule returns module info.
+func (Provider) CaddyModule() caddy.ModuleInfo {
+	return caddy.ModuleInfo{
+		ID:  "dns.providers.plesk",
+		New: func() caddy.Module { return new(Provider) },
+	}
+}
+
+// Provision sets defaults.
+func (p *Provider) Provision(ctx caddy.Context) error {
+	if p.BaseURL == "" {
+		p.BaseURL = "https://localhost/api/v2"
+	}
+	return nil
+}
+
+// GetRecords lists all records in the zone.
+func (p *Provider) GetRecords(ctx context.Context, zone string) ([]libdns.Record, error) {
 	client := NewClient(p.BaseURL, p.Username, p.Password, p.APIKey)
-	// Plesk API: GET /dns/records?domain=example.com
-	vals := url.Values{}
-	vals.Set("domain", zone)
+	vals := url.Values{"domain": {zone}}
 	var recs []struct {
 		ID    int    `json:"id"`
 		Type  string `json:"type"`
 		Host  string `json:"host"`
 		Value string `json:"value"`
-		Opt   string `json:"opt,omitempty"`
 		TTL   int    `json:"ttl"`
 	}
 	if err := client.doRequest("GET", "/dns/records", vals, nil, &recs); err != nil {
 		return nil, err
 	}
-	records := make([]caddy_dns.Record, len(recs))
+	out := make([]libdns.Record, len(recs))
 	for i, r := range recs {
-		records[i] = caddy_dns.Record{
-			ID:       fmt.Sprint(r.ID),
-			Type:     r.Type,
-			Name:     r.Host,
-			Value:    r.Value,
-			TTL:      r.TTL,
-			Priority: 0,
-			Port:     0,
-			Weight:   0,
-			Flags:    0,
+		out[i] = libdns.Record{
+			ID:    fmt.Sprint(r.ID),
+			Type:  r.Type,
+			Name:  r.Host,
+			Value: r.Value,
+			TTL:   r.TTL,
 		}
 	}
-	return records, nil
+	return out, nil
 }
 
-func (p *DNSProvider) GetZoneRecords(ctx context.Context, zone string) ([]caddy_dns.Record, error) {
-	return p.Records(zone)
-}
-
-func (p *DNSProvider) CreateZoneRecord(ctx context.Context, zone string, rec caddy_dns.Record) (caddy_dns.Record, error) {
+// AppendRecord creates a new record in the zone.
+func (p *Provider) AppendRecord(ctx context.Context, zone string, rec libdns.Record) (libdns.Record, error) {
 	client := NewClient(p.BaseURL, p.Username, p.Password, p.APIKey)
-	vals := url.Values{}
-	vals.Set("domain", zone)
-	reqBody := map[string]interface{}{
+	vals := url.Values{"domain": {zone}}
+	body := map[string]interface{}{
 		"type":  rec.Type,
 		"host":  rec.Name,
 		"value": rec.Value,
 		"ttl":   rec.TTL,
 	}
-	var created struct {
+	var resp struct {
 		ID int `json:"id"`
 	}
-	if err := client.doRequest("POST", "/dns/records", vals, reqBody, &created); err != nil {
+	if err := client.doRequest("POST", "/dns/records", vals, body, &resp); err != nil {
 		return rec, err
 	}
-	rec.ID = fmt.Sprint(created.ID)
+	rec.ID = fmt.Sprint(resp.ID)
 	return rec, nil
 }
 
-func (p *DNSProvider) UpdateZoneRecord(ctx context.Context, zone string, existingID string, rec caddy_dns.Record) (caddy_dns.Record, error) {
+// DeleteRecord removes a record by ID.
+func (p *Provider) DeleteRecord(ctx context.Context, zone, id string) error {
 	client := NewClient(p.BaseURL, p.Username, p.Password, p.APIKey)
-	path := "/dns/records/" + existingID
-	reqBody := map[string]interface{}{
-		"type":  rec.Type,
-		"host":  rec.Name,
-		"value": rec.Value,
-		"ttl":   rec.TTL,
-	}
-	if err := client.doRequest("PUT", path, nil, reqBody, nil); err != nil {
-		return rec, err
-	}
-	rec.ID = existingID
-	return rec, nil
+	return client.doRequest("DELETE", "/dns/records/"+id, nil, nil, nil)
 }
 
-func (p *DNSProvider) DeleteZoneRecord(ctx context.Context, zone string, id string) error {
-	client := NewClient(p.BaseURL, p.Username, p.Password, p.APIKey)
-	path := "/dns/records/" + id
-	return client.doRequest("DELETE", path, nil, nil, nil)
-}
+var _ libdns.RecordGetter = (*Provider)(nil)
+var _ libdns.RecordAppender = (*Provider)(nil)
+var _ libdns.RecordRemover = (*Provider)(nil)
