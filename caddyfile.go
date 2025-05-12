@@ -4,19 +4,31 @@ import (
 	"github.com/caddyserver/caddy/v2/caddyconfig/caddyfile"
 )
 
-// UnmarshalCaddyfile parses the provider block in a Caddyfile.
+// UnmarshalCaddyfile configures the provider from a Caddyfile.
 func (p *Provider) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 	for d.Next() {
-		for d.NextBlock() {
+		for d.NextBlock(0) {
 			switch d.Val() {
 			case "base_url":
-				p.BaseURL = d.NextArg()
+				if !d.NextArg() {
+					return d.Err("missing base_url argument")
+				}
+				p.BaseURL = d.Val()
 			case "api_key":
-				p.APIKey = d.NextArg()
+				if !d.NextArg() {
+					return d.Err("missing api_key argument")
+				}
+				p.APIKey = d.Val()
 			case "username":
-				p.Username = d.NextArg()
+				if !d.NextArg() {
+					return d.Err("missing username argument")
+				}
+				p.Username = d.Val()
 			case "password":
-				p.Password = d.NextArg()
+				if !d.NextArg() {
+					return d.Err("missing password argument")
+				}
+				p.Password = d.Val()
 			default:
 				return d.Errf("unknown directive '%s'", d.Val())
 			}

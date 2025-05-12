@@ -4,12 +4,13 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"time"
 
 	"github.com/caddyserver/caddy/v2"
 	"github.com/libdns/libdns"
 )
 
-// Provider configures the Plesk DNS provider.
+// Provider configures DNS updates against Plesk.
 type Provider struct {
 	BaseURL  string `json:"base_url,omitempty"`
 	APIKey   string `json:"api_key,omitempty"`
@@ -21,7 +22,7 @@ func init() {
 	caddy.RegisterModule(Provider{})
 }
 
-// CaddyModule returns module info.
+// CaddyModule returns the module information.
 func (Provider) CaddyModule() caddy.ModuleInfo {
 	return caddy.ModuleInfo{
 		ID:  "dns.providers.plesk",
@@ -37,7 +38,7 @@ func (p *Provider) Provision(ctx caddy.Context) error {
 	return nil
 }
 
-// GetRecords lists all records in the zone.
+// GetRecords lists all DNS records in the zone.
 func (p *Provider) GetRecords(ctx context.Context, zone string) ([]libdns.Record, error) {
 	client := NewClient(p.BaseURL, p.Username, p.Password, p.APIKey)
 	vals := url.Values{"domain": {zone}}
@@ -51,45 +52,81 @@ func (p *Provider) GetRecords(ctx context.Context, zone string) ([]libdns.Record
 	if err := client.doRequest("GET", "/dns/records", vals, nil, &recs); err != nil {
 		return nil, err
 	}
-	out := make([]libdns.Record, len(recs))
-	for i, r := range recs {
-		out[i] = libdns.Record{
-			ID:    fmt.Sprint(r.ID),
-			Type:  r.Type,
-			Name:  r.Host,
-			Value: r.Value,
-			TTL:   r.TTL,
+	var out []libdns.Record
+	for _, r := range recs {
+		rr := libdns.RR{
+			Name: r.Host,
+			TTL:  time.Duration(r.TTL) * time.Second,
+			Type: r.Type,
+			Data: r.Value,
 		}
+		out = append(out, rr)
 	}
 	return out, nil
 }
 
-// AppendRecord creates a new record in the zone.
-func (p *Provider) AppendRecord(ctx context.Context, zone string, rec libdns.Record) (libdns.Record, error) {
+// AppendRecords creates new records in the zone.
+func (p *Provider) AppendRecords(ctx context.Context, zone string, recs []libdns.Record) ([]libdns.Record, error) {
 	client := NewClient(p.BaseURL, p.Username, p.Password, p.APIKey)
-	vals := url.Values{"domain": {zone}}
-	body := map[string]interface{}{
-		"type":  rec.Type,
-		"host":  rec.Name,
-		"value": rec.Value,
-		"ttl":   rec.TTL,
+	var created []libdns.Record
+	for _, rec := range recs {
+		rr := rec.RR()
+		body := map[string]interface{}{
+			"type":  rr.Type,
+			"host":  rr.Name,
+			"value": rr.Data,
+			"ttl":   int(rr.TTL.Seconds()),
+		}
+		var resp struct {
+			ID int `json:"id"`
+		}
+		if err := client.doRequest("POST", "/dns/records", url.Values{"domain": {zone}}, body, &resp); err != nil {
+			return nil, err
+		}
+		newRR := libdns.RR{
+			Name: rr.Name,
+			TTL:  rr.TTL,
+			Type: rr.Type,
+			Data: rr.Data,
+		}
+		created = append(created, newRR)
 	}
-	var resp struct {
-		ID int `json:"id"`
-	}
-	if err := client.doRequest("POST", "/dns/records", vals, body, &resp); err != nil {
-		return rec, err
-	}
-	rec.ID = fmt.Sprint(resp.ID)
-	return rec, nil
+	return created, nil
 }
 
-// DeleteRecord removes a record by ID.
-func (p *Provider) DeleteRecord(ctx context.Context, zone, id string) error {
+// DeleteRecords removes records matching in the zone.
+func (p *Provider) DeleteRecords(ctx context.Context, zone string, recs []libdns.Record) ([]libdns.Record, error) {
 	client := NewClient(p.BaseURL, p.Username, p.Password, p.APIKey)
-	return client.doRequest("DELETE", "/dns/records/"+id, nil, nil, nil)
+	vals := url.Values{"domain": {zone}}
+	// fetch existing with IDs
+	var recList []struct {
+		ID    int    `json:"id"`
+		Type  string `json:"type"`
+		Host  string `json:"host"`
+		Value string `json:"value"`
+		TTL   int    `json:"ttl"`
+	}
+	if err := client.doRequest("GET", "/dns/records", vals, nil, &recList); err != nil {
+		return nil, err
+	}
+	var deleted []libdns.Record
+	// match and delete
+	for _, rec := range recs {
+		rr := rec.RR()
+		for _, r := range recList {
+			if r.Type == rr.Type && r.Host == rr.Name && r.Value == rr.Data && r.TTL == int(rr.TTL.Seconds()) {
+				path := fmt.Sprintf("/dns/records/%d", r.ID)
+				if err := client.doRequest("DELETE", path, nil, nil, nil); err != nil {
+					return nil, err
+				}
+				deleted = append(deleted, rr)
+				break
+			}
+		}
+	}
+	return deleted, nil
 }
 
 var _ libdns.RecordGetter = (*Provider)(nil)
 var _ libdns.RecordAppender = (*Provider)(nil)
-var _ libdns.RecordRemover = (*Provider)(nil)
+var _ libdns.RecordDeleter = (*Provider)(nil)

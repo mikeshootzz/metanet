@@ -9,7 +9,7 @@ import (
 	"net/url"
 )
 
-// Client handles requests to the Plesk API.
+// Client wraps HTTP calls to the Plesk API.
 type Client struct {
 	BaseURL    string
 	Username   string
@@ -18,7 +18,7 @@ type Client struct {
 	HTTPClient *http.Client
 }
 
-// NewClient creates a new API client.
+// NewClient initializes a Plesk API client.
 func NewClient(baseURL, username, password, apiKey string) *Client {
 	return &Client{
 		BaseURL:    baseURL,
@@ -29,7 +29,7 @@ func NewClient(baseURL, username, password, apiKey string) *Client {
 	}
 }
 
-// doRequest makes an HTTP call to Plesk.
+// doRequest executes an HTTP request to Plesk.
 func (c *Client) doRequest(method, path string, params url.Values, body interface{}, out interface{}) error {
 	u := c.BaseURL + path
 	if len(params) > 0 {
